@@ -1,45 +1,291 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Windows 11 Wi-Fi 1068 故障排查与修复记录</title>
-    <style>
-        body{font-family:Arial,"Microsoft YaHei",sans-serif;line-height:1.65;margin:0;background:#f5f7fa;color:#202124}
-        .wrap{max-width:1100px;margin:0 auto;padding:32px 20px}
-        h1{font-size:30px;margin-bottom:8px}
-        h2{margin-top:36px;border-bottom:2px solid #ddd;padding-bottom:8px}
-        h3{margin-top:26px}
-        .card{background:#fff;border-radius:12px;padding:20px;margin:16px 0;box-shadow:0 2px 8px #00000010}
-        .ok{border-left:5px solid #20a464}.warn{border-left:5px solid #e7a11a}.bad{border-left:5px solid #d64545}.info{border-left:5px solid #00c9e7}
-        code{background:#eef1f5;padding:2px 5px;border-radius:4px}
-        pre{background:#1e1e1e;color:#e8e8e8;padding:16px;border-radius:9px;overflow:auto}
-        .cmd{@color:#9cdcfe}.comment{@color:#6a9955}
-        table{width:100%;border-collapse:collapse;background:#fff;margin:14px 0}
-        th,td{border:1px solid #ddd;padding:10px;text-align:left;vertical-align:top}
-        th{background:#f0f2f5}
-        .tag{display:inline-block;padding:3px 8px;border-radius:12px;background:#e8f0fe;margin:2px}
-        .small{font-size:14px;color:#666}
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows 11 Wi‑Fi 1068 故障排查与修复记录</title>
+<style>
+  body{font-family:Arial,"Microsoft YaHei",sans-serif;line-height:1.65;margin:0;background:#f5f7fa;color:#202124}
+  .wrap{max-width:1100px;margin:0 auto;padding:32px 20px}
+  h1{font-size:30px;margin-bottom:8px}
+  h2{margin-top:36px;border-bottom:2px solid #ddd;padding-bottom:8px}
+  h3{margin-top:26px}
+  .card{background:#fff;border-radius:12px;padding:20px;margin:16px 0;box-shadow:0 2px 8px #00000010}
+  .ok{border-left:5px solid #20a464}.warn{border-left:5px solid #e7a11a}.bad{border-left:5px solid #d64545}.info{border-left:5px solid #4285f4}
+  code{background:#eef1f5;padding:2px 5px;border-radius:4px}
+  pre{background:#1e1e1e;color:#e8e8e8;padding:16px;border-radius:9px;overflow:auto}
+  .cmd{color:#9cdcfe}.comment{color:#6a9955}
+  table{width:100%;border-collapse:collapse;background:#fff;margin:14px 0}
+  th,td{border:1px solid #ddd;padding:10px;text-align:left;vertical-align:top}
+  th{background:#f0f2f5}
+  .tag{display:inline-block;padding:3px 8px;border-radius:12px;background:#e8f0fe;margin:2px}
+  .small{font-size:14px;color:#666}
+</style>
 </head>
 <body>
 <div class="wrap">
 
-    <h1>Windows 11 Wi-Fi 1068 故障排查与修复记录</h1>
-    <p class="small">问题：Wi-Fi 消失 / WLAN AutoConfig 启动失败 (Error 1068)，之后进一步发现 IPv4/DHCP 问题。</p>
+<h1>Windows 11 Wi‑Fi 故障排查与修复记录</h1>
+<p class="small">问题：Wi‑Fi 消失 / WLAN AutoConfig 启动失败（Error 1068），之后进一步发现 IPv4/DHCP 问题。</p>
 
-    <div class="card info">
-        <strong>最终结果：</strong>Wi-Fi 服务已经恢复，可以连接网络并正常上网。
-        <br>
-        <strong>主要修复：</strong>发现 <code>Wcmsvc</code> 因依赖 <code>WinHttpAutoProxySvc</code> 启动失败而无法启动；最终将 Wcmsvc 依赖修改，并解决系统服务残留问题。
-    </div>
-    
-    <h2>1. 症状与环境描述</h2>
-    <div class="card">
-        <p>Windows 11 22H2 1068 Wi-Fi 控制面板</p>
-    </div>
+<div class="card info">
+<strong>最终结果：</strong>Wi‑Fi 服务已经恢复，可以连接网络并正常上网。
+<br>
+<strong>主要修复：</strong>发现 <code>Wcmsvc</code> 因依赖 <code>WinHttpAutoProxySvc</code> 启动失败而无法启动；最终将 Wcmsvc 依赖调整为 <code>RpcSs/NSI</code>，之后 Wcmsvc 与 WlanSvc 可以启动。
+</div>
 
-    < by 子夜星空>
+<h2>一、故障链总览</h2>
+<pre>
+WlanSvc（WLAN AutoConfig）
+        │
+        ├── nativewifip   → Running
+        ├── RpcSs         → Running
+        ├── Ndisuio       → Running
+        └── Wcmsvc        → 原本无法启动
+                           │
+                           ├── RpcSs                  → Running
+                           ├── NSI                    → Running
+                           └── WinHttpAutoProxySvc    → 启动失败 10022
+</pre>
+
+<div class="card warn">
+<strong>最终关键点：</strong>
+<code>WinHttpAutoProxySvc</code> 启动时报 <code>Service-specific error 10022</code>，
+导致 <code>Wcmsvc</code> 报 1068，进一步导致 <code>WlanSvc</code> 报 1068。
+</div>
+
+<h2>二、项目 1：检查 WLAN AutoConfig（WlanSvc）</h2>
+
+<h3>1. 查看 WlanSvc 配置</h3>
+<pre><span class="cmd">sc.exe qc Wlansvc</span></pre>
+<p>作用：查看 WLAN AutoConfig 的启动方式、程序路径和依赖服务。</p>
+
+<table>
+<tr><th>项目</th><th>结果 / 含义</th></tr>
+<tr><td>START_TYPE</td><td>AUTO_START：Windows 自动启动</td></tr>
+<tr><td>DISPLAY_NAME</td><td>WLAN AutoConfig</td></tr>
+<tr><td>依赖</td><td><code>nativewifip</code>、<code>RpcSs</code>、<code>Ndisuio</code>、<code>wcmsvc</code></td></tr>
+</table>
+
+<h3>2. 尝试启动 WlanSvc</h3>
+<pre><span class="cmd">net start WlanSvc</span></pre>
+<p>结果：<strong>System error 1068</strong>。</p>
+<p>含义：WlanSvc 自己不是最底层故障，而是它依赖的服务/组件没有启动。</p>
+
+<h2>三、项目 2：逐个检查 WlanSvc 依赖</h2>
+
+<h3>nativewifip</h3>
+<pre><span class="cmd">sc.exe query nativewifip</span></pre>
+<p>最终确认：<strong>RUNNING</strong>。</p>
+
+<div class="card warn">
+<strong>注意：</strong>之前曾经输入过 <code>nativewifiip</code>，这是多了一个 i 的错误拼写。
+正确名称是 <code>nativewifip</code>。
+</div>
+
+<h3>RpcSs</h3>
+<pre><span class="cmd">sc.exe query RpcSs</span></pre>
+<p>结果：RUNNING。Windows RPC 基础服务正常。</p>
+
+<h3>Ndisuio</h3>
+<pre><span class="cmd">sc.exe query Ndisuio</span></pre>
+<p>结果：RUNNING。WLAN 相关网络 I/O 组件正常。</p>
+
+<h3>Wcmsvc</h3>
+<pre><span class="cmd">sc.exe query wcmsvc</span></pre>
+<p>结果：STOPPED，并且启动时报 <strong>1068</strong>。</p>
+
+<h2>四、项目 3：检查 Wcmsvc 的真正依赖</h2>
+
+<h3>查看配置</h3>
+<pre><span class="cmd">sc.exe qc wcmsvc</span></pre>
+
+<p>实际看到的依赖为：</p>
+
+<pre>
+DEPENDENCIES
+    RpcSs
+    NSI
+    WinHttpAutoProxySvc
+</pre>
+
+<h3>检查 NSI</h3>
+<pre><span class="cmd">sc.exe query nsi</span></pre>
+<p>结果：<strong>RUNNING</strong>，因此 NSI 不是故障点。</p>
+
+<h3>检查 WinHttpAutoProxySvc</h3>
+<pre><span class="cmd">sc.exe query WinHttpAutoProxySvc</span></pre>
+
+<p>结果：</p>
+<pre>
+STATE              : 1  STOPPED
+WIN32_EXIT_CODE    : 1066
+SERVICE_EXIT_CODE  : 10022
+</pre>
+
+<p>于是直接测试：</p>
+<pre><span class="cmd">net start WinHttpAutoProxySvc</span></pre>
+
+<p>结果：</p>
+<pre>
+The WinHTTP Web Proxy Auto-Discovery Service service is starting.
+The WinHTTP Web Proxy Auto-Discovery Service service could not be started.
+
+A service specific error occurred: 10022.
+</pre>
+
+<div class="card bad">
+<strong>真正的底层故障：</strong><br>
+WinHttpAutoProxySvc 无法启动，具体服务错误码为 <code>10022</code>。
+</div>
+
+<h2>五、项目 4：系统文件完整性检查</h2>
+
+<h3>SFC</h3>
+<pre><span class="cmd">sfc /scannow</span></pre>
+<p>结果：Windows Resource Protection 没有发现完整性违规。</p>
+<p>含义：没有发现普通系统文件损坏，因此没有继续通过 SFC 修复。</p>
+
+<h3>DISM</h3>
+<pre><span class="cmd">DISM /Online /Cleanup-Image /RestoreHealth</span></pre>
+<p>执行过程中曾长时间停在约 64.4%。CBS 日志仍有活动，但最终手动取消，返回：</p>
+<pre>
+Error: 1223
+Operation was incomplete because of a cancel request.
+</pre>
+<p>所以 DISM <strong>不是一次成功完成的修复</strong>，不能把它当作已修复项目。</p>
+
+<h2>六、项目 5：确认 Wi‑Fi 驱动文件</h2>
+
+<pre><span class="cmd">dir C:\Windows\System32\drivers\nwifi.sys</span></pre>
+
+<p>结果：<code>nwifi.sys</code> 文件存在，大小约 <strong>991232 bytes</strong>。</p>
+<p>意义：至少说明相关 Native Wi‑Fi 驱动文件并没有简单地“完全不存在”。</p>
+
+<h2>七、项目 6：修复 Wcmsvc 的依赖关系</h2>
+
+<p>为了绕过无法启动的 WinHttpAutoProxySvc，修改 Wcmsvc 的依赖：</p>
+
+<pre><span class="cmd">sc.exe config Wcmsvc depend= RpcSs/NSI</span></pre>
+
+<p>结果：</p>
+<pre>[SC] ChangeServiceConfig SUCCESS</pre>
+
+<p>即把 Wcmsvc 的依赖从：</p>
+<pre>
+RpcSs
+NSI
+WinHttpAutoProxySvc
+</pre>
+<p>调整成：</p>
+<pre>
+RpcSs
+NSI
+</pre>
+
+<h3>然后启动 Wcmsvc</h3>
+<pre><span class="cmd">net start Wcmsvc</span></pre>
+
+<p>启动成功。</p>
+
+<h3>再启动 WlanSvc</h3>
+<pre><span class="cmd">net start WlanSvc</span></pre>
+
+<p>启动成功，Wi‑Fi 功能恢复。</p>
+
+<div class="card warn">
+<strong>重要：</strong>这一步是“绕过” WinHttpAutoProxySvc 的故障，不等于 WinHttpAutoProxySvc 本身已经修好。
+</div>
+
+<h2>八、项目 7：Wi‑Fi 能连接，但显示“无 Internet”</h2>
+
+<h3>检查 IP</h3>
+<pre><span class="cmd">ipconfig</span></pre>
+
+<p>Wi‑Fi 当时得到：</p>
+<pre>
+Autoconfiguration IPv4 Address : 169.254.190.129
+Subnet Mask                    : 255.255.0.0
+Default Gateway                : 没有 IPv4 网关
+</pre>
+
+<p><code>169.254.x.x</code> 是 APIPA 地址，通常表示 Windows 没有从 DHCP 服务器拿到正常 IPv4 地址。</p>
+
+<h3>尝试重新获取 DHCP 地址</h3>
+<pre><span class="cmd">ipconfig /release</span>
+<span class="cmd">ipconfig /renew</span></pre>
+
+<p>当时 <code>/renew</code> 显示 Wi‑Fi：</p>
+<pre>
+An error occurred while renewing interface Wi-Fi:
+An invalid argument was supplied.
+</pre>
+
+<p>此时 IPv4 仍然是 169.254.x.x。</p>
+
+<h2>九、项目 8：网络协议栈修复（当时准备执行）</h2>
+
+<p>曾准备使用：</p>
+
+<pre><span class="cmd">netsh int ip reset</span>
+<span class="cmd">netsh winsock reset</span></pre>
+
+<p>但是后来用户反馈<strong>已经重新连上并可以正常上网</strong>，因此不需要继续执行这些命令，也没有必要重启。</p>
+
+<div class="card ok">
+<strong>最终状态：</strong>无需进一步网络重置，网络已经恢复正常。
+</div>
+
+<h2>十、所有关键代码速查表</h2>
+
+<table>
+<tr><th>代码</th><th>作用</th><th>本次结果</th></tr>
+<tr><td><code>sc.exe qc Wlansvc</code></td><td>查看 WLAN AutoConfig 配置/依赖</td><td>发现 Wcmsvc 等依赖</td></tr>
+<tr><td><code>net start WlanSvc</code></td><td>启动 WLAN AutoConfig</td><td>最初 1068，修复后成功</td></tr>
+<tr><td><code>sc.exe query nativewifip</code></td><td>检查 Native Wi‑Fi 相关服务</td><td>Running</td></tr>
+<tr><td><code>sc.exe query RpcSs</code></td><td>检查 RPC 服务</td><td>Running</td></tr>
+<tr><td><code>sc.exe query Ndisuio</code></td><td>检查 WLAN I/O 组件</td><td>Running</td></tr>
+<tr><td><code>sc.exe qc wcmsvc</code></td><td>查看 Windows Connection Manager 依赖</td><td>RpcSs / NSI / WinHttpAutoProxySvc</td></tr>
+<tr><td><code>sc.exe query nsi</code></td><td>检查 Network Store Interface</td><td>Running</td></tr>
+<tr><td><code>sc.exe query WinHttpAutoProxySvc</code></td><td>检查 WinHTTP 自动代理发现服务</td><td>Stopped，10022</td></tr>
+<tr><td><code>net start WinHttpAutoProxySvc</code></td><td>启动 WinHTTP Auto-Proxy 服务</td><td>失败，10022</td></tr>
+<tr><td><code>sc.exe config Wcmsvc depend= RpcSs/NSI</code></td><td>修改 Wcmsvc 依赖</td><td>成功</td></tr>
+<tr><td><code>net start Wcmsvc</code></td><td>启动 Windows Connection Manager</td><td>成功</td></tr>
+<tr><td><code>net start WlanSvc</code></td><td>启动 WLAN AutoConfig</td><td>成功</td></tr>
+<tr><td><code>ipconfig</code></td><td>查看 IP/网关/DNS 等网络参数</td><td>发现 169.254.x.x</td></tr>
+<tr><td><code>ipconfig /release</code></td><td>释放 DHCP 地址</td><td>执行过</td></tr>
+<tr><td><code>ipconfig /renew</code></td><td>重新向 DHCP 请求地址</td><td>当时出现 invalid argument</td></tr>
+<tr><td><code>sfc /scannow</code></td><td>检查系统文件完整性</td><td>未发现完整性违规</td></tr>
+<tr><td><code>DISM /Online /Cleanup-Image /RestoreHealth</code></td><td>修复 Windows 组件存储</td><td>64.4% 后取消，Error 1223</td></tr>
+<tr><td><code>dir ...\nwifi.sys</code></td><td>确认 Wi‑Fi 驱动文件是否存在</td><td>存在</td></tr>
+</table>
+
+<h2>十一、当前已知的“未完全修复项”</h2>
+
+<div class="card warn">
+<ol>
+<li><strong>WinHttpAutoProxySvc：</strong>仍然存在 10022 启动错误。当前只是从 Wcmsvc 的依赖链中移除了它。</li>
+<li><strong>DISM：</strong>没有成功完整执行 RestoreHealth，因此不能说 DISM 修复完成。</li>
+<li><strong>Wcmsvc 依赖：</strong>已经被修改。如果以后使用企业代理、WPAD、某些 VPN 或特殊网络环境出现问题，需要重新检查这一项。</li>
+</ol>
+</div>
+
+<h2>十二、以后如果 Wi‑Fi 又坏了，建议先检查这 5 项</h2>
+
+<pre><span class="cmd">sc.exe query WlanSvc</span>
+sc.exe query Wcmsvc
+sc.exe query RpcSs
+sc.exe query nsi
+sc.exe query WinHttpAutoProxySvc</pre>
+
+<p>如果普通 Wi‑Fi 已经可以正常上网，<strong>不要为了“看起来更干净”而重新修改这些服务</strong>。</p>
+
+<div class="card ok">
+<strong>最终结论：</strong>
+本次故障主要经历了两层：<br>
+① WLAN AutoConfig 1068 → 找到 Wcmsvc 依赖链 → WinHttpAutoProxySvc 10022 → 调整 Wcmsvc 依赖后恢复 WLAN。<br>
+② Wi‑Fi 恢复后 IPv4 一度拿到 169.254.x.x → DHCP/IPv4 层异常 → 随后网络自行恢复，最终可以正常联网。
+</div>
 
 </div>
 </body>
