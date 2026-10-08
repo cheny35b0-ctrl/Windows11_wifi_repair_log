@@ -20,9 +20,49 @@
   th{background:#f0f2f5}
   .tag{display:inline-block;padding:3px 8px;border-radius:12px;background:#e8f0fe;margin:2px}
   .small{font-size:14px;color:#666}
+  /* 顶部控制栏及翻译按钮样式 */
+        .top-bar {
+            background: #ffffff;
+            padding: 12px 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+        }
+        .translate-box { display: flex; align-items: center; gap: 8px; }
+        .translate-title { font-size: 14px; font-weight: bold; color: #5f6368; }
+        .lang-btn {
+            border: 1px solid #dadce0;
+            background: #ffffff;
+            color: #1a73e8;
+            padding: 5px 12px;
+            border-radius: 16px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .lang-btn:hover { background: #e8f0fe; border-color: #1a73e8; }
+
+        /* 隐藏原本丑陋的 Google 翻译顶栏和下拉框 */
+        #google_translate_element { display: none; }
+        .goog-te-banner-frame { display: none !important; }
+        body { top: 0px !important; }
 </style>
 </head>
 <body>
+  <!-- 顶部语言翻译按钮栏 -->
+    <div class="top-bar">
+        <div class="translate-box">
+            <span class="translate-title">🌐 语言 / Language:</span>
+            <button class="lang-btn" onclick="translatePage('zh-CN')">中文</button>
+            <button class="lang-btn" onclick="translatePage('ja')">日本語</button>
+            <button class="lang-btn" onclick="translatePage('en')">English</button>
+        </div>
+    </div>
+    <!-- 隐藏的 Google 翻译挂载点 -->
+    <div id="google_translate_element"></div>
 <div class="wrap">
 
 <h1>Windows 11 Wi‑Fi 故障排查与修复记录</h1>
@@ -288,5 +328,24 @@ sc.exe query WinHttpAutoProxySvc</pre>
 </div>
 
 </div>
+  <!-- 自动翻译控制脚本 -->
+<script type="text/javascript">
+    function googleTranslateElementInit() {
+        new google.translate.TranslateElement({
+            pageLanguage: 'zh-CN',
+            includedLanguages: 'zh-CN,ja,en',
+            autoDisplay: false
+        }, 'google_translate_element');
+    }
+
+    function translatePage(langCode) {
+        var select = document.querySelector('.goog-te-combo');
+        if (select) {
+            select.value = langCode;
+            select.dispatchEvent(new Event('change'));
+        }
+    }
+</script>
+<script type="text/javascript" src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
 </body>
 </html>
